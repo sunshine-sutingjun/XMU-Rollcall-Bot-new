@@ -1,6 +1,8 @@
 import click
 import logging
 import math
+import shutil
+import subprocess
 from decimal import Decimal, InvalidOperation
 import sys
 from . import tui
@@ -17,6 +19,14 @@ from .monitor import start_monitor, base_url, headers
 
 logger = logging.getLogger(__name__)
 
+# Fixed install source for this fork. The command upgrades the program only.
+INSTALL_URL = (
+    "git+https://github.com/sunshine-sutingjun/XMU-Rollcall-Bot-new.git"
+    "#subdirectory=xmu-rollcall-cli"
+)
+TOOL_PACKAGE = "xmu-rollcall-cli"
+_UPDATE_COMMANDS = frozenset({"update", "upgrade"})
+
 # ANSI Color codes
 class Colors:
     HEADER = '\033[95m'
@@ -32,10 +42,14 @@ class Colors:
 @click.group(invoke_without_command=True)
 @click.pass_context
 def cli(ctx):
-    log_file = setup_logging()
-    ctx.ensure_object(dict)
-    ctx.obj["log_file"] = log_file
     command_name = ctx.invoked_subcommand or "interactive"
+    ctx.ensure_object(dict)
+    # update/upgrade must not open the account directory or its log file.
+    if command_name in _UPDATE_COMMANDS:
+        logger.info("CLI invoked: %s", command_name)
+        return
+    log_file = setup_logging()
+    ctx.obj["log_file"] = log_file
     logger.info("CLI invoked: %s", command_name)
     if ctx.invoked_subcommand is None:
         interactive_menu(ctx)
@@ -44,13 +58,16 @@ def cli(ctx):
 def interactive_menu(ctx):
     if tui.console.is_terminal:
         tui.console.clear()
-    aliases = {"1": "config", "2": "switch", "3": "start", "4": "refresh"}
+    aliases = {
+        "1": "config", "2": "switch", "3": "start", "4": "refresh",
+        "5": "update", "upgrade": "update",
+    }
     while True:
         data = load_config()
         tui.home(get_current_account(data), len(get_all_accounts(data)))
         try:
             action = tui.prompt("Command", type=click.Choice(
-                ["1", "2", "3", "4", "config", "switch", "start", "refresh"],
+                ["1", "2", "3", "4", "5", "config", "switch", "start", "refresh", "update", "upgrade"],
                 case_sensitive=False)).lower()
             command = cli.commands[aliases.get(action, action)]
             try:
@@ -217,6 +234,44 @@ def config():
         saved_text = "false" if saved is False else str(saved)
         tui.echo(f"{Colors.OKGREEN}Settings saved. wait_before_answer = {saved_text}{Colors.ENDC}\n")
 
+    def edit_radar_campus():
+        accounts = get_all_accounts(current_config)
+        if not accounts:
+            tui.echo(f"{Colors.WARNING}No accounts to configure.{Colors.ENDC}\n")
+            return
+
+        show_accounts()
+        valid_ids = [str(acc.get("id")) for acc in accounts]
+        selected_id = tui.prompt(
+            f"{Colors.BOLD}Enter account ID to set radar campus{Colors.ENDC}",
+            type=click.Choice(valid_ids, case_sensitive=False),
+        )
+        selected_account = get_account_by_id(current_config, int(selected_id))
+        if not selected_account:
+            tui.echo(f"{Colors.FAIL}Account not found.{Colors.ENDC}\n")
+            return
+
+        settings = get_rollcall_settings(selected_account)
+        current_campus = settings.get("radar_campus") or "unset"
+        tui.echo()
+        tui.echo(f"{Colors.BOLD}Radar campus for {selected_account.get('name') or selected_account.get('username')}:{Colors.ENDC}")
+        tui.echo(f"  radar_campus: {Colors.OKCYAN}{current_campus}{Colors.ENDC}")
+        tui.echo("  xiangan - Xiang'an campus")
+        tui.echo("  siming  - Siming campus")
+        prompt_kwargs = {}
+        if current_campus != "unset":
+            prompt_kwargs["default"] = current_campus
+            prompt_kwargs["show_default"] = True
+        choice = tui.prompt(
+            f"{Colors.BOLD}radar_campus{Colors.ENDC}",
+            type=click.Choice(["xiangan", "siming"], case_sensitive=False),
+            **prompt_kwargs,
+        ).strip().lower()
+        set_rollcall_settings(selected_account, {"radar_campus": choice})
+        save_config(current_config)
+        saved = get_rollcall_settings(selected_account).get("radar_campus")
+        tui.echo(f"{Colors.OKGREEN}Settings saved. radar_campus = {saved}{Colors.ENDC}\n")
+
     def edit_interval():
         while True:
             value = tui.prompt("Polling interval (seconds)", type=float,
@@ -242,6 +297,7 @@ def config():
                 tui.panel(tui.menu_rows([
                     ("n", "Add new account"), ("d", "Delete account"),
                     ("s", "Edit rollcall settings"),
+                    ("c", "Set radar campus"),
                     ("i", f"Polling interval: {get_interval(current_config):g}s (all accounts)"),
                     ("r", f"Disable monitor retries: {str(get_disable_monitor_retry(current_config)).lower()} (all accounts)")]),
                     "Actions", "blue")),
@@ -250,7 +306,7 @@ def config():
 
             action = tui.prompt(
                 f"{Colors.BOLD}Action{Colors.ENDC}",
-                type=click.Choice(['n', 'd', 's', 'i', 'r'], case_sensitive=False),
+                type=click.Choice(['n', 'd', 's', 'c', 'i', 'r'], case_sensitive=False),
             )
 
             if action.lower() == 'n':
@@ -259,6 +315,8 @@ def config():
                 delete_existing_account()
             elif action.lower() == 's':
                 edit_account_settings()
+            elif action.lower() == 'c':
+                edit_radar_campus()
             elif action.lower() == 'i':
                 edit_interval()
             elif action.lower() == 'r':
@@ -358,6 +416,38 @@ def switch():
     else:
         tui.echo(f"{Colors.FAIL}✗ Account not found!{Colors.ENDC}")
         sys.exit(1)
+
+
+def update_install_argv():
+    """Choose uv when it is on PATH; otherwise pip. Never touches account files."""
+    if shutil.which("uv"):
+        return ["uv", "tool", "install", "--upgrade", "--force", INSTALL_URL]
+    return ["pip", "install", "--upgrade", INSTALL_URL]
+
+
+def run_update():
+    argv = update_install_argv()
+    installer = "uv" if argv[0] == "uv" else "pip"
+    tui.echo(f"{Colors.OKCYAN}Upgrading {TOOL_PACKAGE} with {installer}...{Colors.ENDC}")
+    tui.echo(f"{Colors.GRAY}{' '.join(argv)}{Colors.ENDC}")
+    try:
+        completed = subprocess.run(argv)
+    except FileNotFoundError:
+        tui.echo(f"{Colors.FAIL}Could not run {argv[0]}. Install uv or pip and try again.{Colors.ENDC}")
+        sys.exit(1)
+    sys.exit(completed.returncode)
+
+
+@cli.command(name="update")
+def update():
+    """从本 GitHub 仓库升级程序，不修改已保存的账号"""
+    run_update()
+
+
+@cli.command(name="upgrade")
+def upgrade():
+    """update 的别名，从本 GitHub 仓库升级程序"""
+    run_update()
 
 
 if __name__ == '__main__':

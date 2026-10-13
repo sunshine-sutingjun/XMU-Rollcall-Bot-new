@@ -76,36 +76,38 @@ DEFAULT_ACCOUNT = {
 DEFAULT_ROLLCALL_SETTINGS = DEFAULT_ACCOUNT["rollcall_settings"].copy()
 
 
+RADAR_CAMPUSES = ("xiangan", "siming")
+
+
 def normalize_rollcall_settings(settings):
-    """Normalize disabled, count, or percentage-based waiting."""
+    """Normalize disabled, count, or percentage-based waiting and radar campus."""
     merged = DEFAULT_ROLLCALL_SETTINGS.copy()
     if not isinstance(settings, dict):
         return merged
 
-    if "wait_before_answer" not in settings:
-        return merged
-
-    wait_value = settings.get("wait_before_answer")
-    if isinstance(wait_value, str) and wait_value.strip().endswith("%"):
-        try:
-            percentage = float(wait_value.strip()[:-1])
-        except ValueError:
-            percentage = 0
-        if math.isfinite(percentage) and 0 < percentage <= 100:
-            merged["wait_before_answer"] = f"{percentage}%"
-        else:
+    if "wait_before_answer" in settings:
+        wait_value = settings.get("wait_before_answer")
+        if isinstance(wait_value, str) and wait_value.strip().endswith("%"):
+            try:
+                percentage = float(wait_value.strip()[:-1])
+            except ValueError:
+                percentage = 0
+            if math.isfinite(percentage) and 0 < percentage <= 100:
+                merged["wait_before_answer"] = f"{percentage}%"
+            else:
+                merged["wait_before_answer"] = False
+        elif wait_value is False or wait_value is None:
             merged["wait_before_answer"] = False
-        return merged
-    if wait_value is False or wait_value is None:
-        merged["wait_before_answer"] = False
-        return merged
+        else:
+            try:
+                wait_count = int(wait_value)
+            except (TypeError, ValueError, OverflowError):
+                wait_count = 0
+            merged["wait_before_answer"] = wait_count if wait_count > 0 else False
 
-    try:
-        wait_count = int(wait_value)
-    except (TypeError, ValueError, OverflowError):
-        wait_count = 0
-
-    merged["wait_before_answer"] = wait_count if wait_count > 0 else False
+    campus = settings.get("radar_campus")
+    if isinstance(campus, str) and campus.strip().lower() in RADAR_CAMPUSES:
+        merged["radar_campus"] = campus.strip().lower()
     return merged
 
 
@@ -244,8 +246,15 @@ def get_rollcall_settings(account):
 
 
 def set_rollcall_settings(account, settings):
-    """Persist normalized rollcall settings on an account."""
-    account["rollcall_settings"] = normalize_rollcall_settings(settings or {})
+    """Persist normalized rollcall settings on an account.
+
+    Partial updates keep the other saved keys, so changing the wait does not
+    clear ``radar_campus`` and choosing a campus does not clear the wait.
+    """
+    current = account.get("rollcall_settings")
+    if not isinstance(current, dict):
+        current = {}
+    account["rollcall_settings"] = normalize_rollcall_settings({**current, **(settings or {})})
 
 
 def get_all_accounts(config):

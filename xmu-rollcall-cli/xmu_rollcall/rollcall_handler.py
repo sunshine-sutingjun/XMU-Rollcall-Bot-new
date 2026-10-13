@@ -206,7 +206,7 @@ def handle_rollcalls(data, session, account=None):
             elif rollcalls[i]['is_radar']:
                 wait_for_classmates(session, rollcalls[i]['rollcall_id'], settings)
                 tui.update_rollcall(state="submitting")
-                if send_radar(session, rollcalls[i]['rollcall_id']):
+                if send_radar(session, rollcalls[i]['rollcall_id'], settings.get("radar_campus")):
                     answer_status[i] = True
                 else:
                     print("Answering failed.")

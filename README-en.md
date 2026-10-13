@@ -8,7 +8,8 @@ and the program exits. Ctrl+C exits during the wait. A successful cycle resets
 the delay and retry count. SSL unexpected EOF errors
 (`UNEXPECTED_EOF_WHILE_READING`) also trigger backoff retries. Failures and recovery are logged.
 Interrupted rollcall processing re-fetches server state before another submission.
-Monitor and number/radar requests use 10-second connect and 30-second read timeouts;
+Monitor and number requests use 10-second connect and 30-second read timeouts;
+radar probes use 5-second connect and 8-second read timeouts;
 attendance waiting retains its 10-second timeout. Exceptions from cached-session
 validation and startup login fail immediately without backoff retries; the external login
 library still controls its own internal timeouts and error return behavior.
@@ -28,7 +29,7 @@ Automatic Check-In Program for XMU(Tronclass), **Intended for educational and re
 - Monitor rollcall status in real-time
 - Perform rollcall automatically:
   - Number rollcall: get number code from API
-  - Radar rollcall: solve the location using two points
+  - Radar rollcall: for the selected campus, try known building centers, then a grid
 - Supports waiting until a certain number of classmates have checked in before submitting
 - Supports multiple accounts, stores encrypted account informations and sessions in sqlite
 - Record the rollcall status in a log file
@@ -72,7 +73,7 @@ uv sync
 
 ## Usage
 
-Run `xmu-rollcall` without arguments to open the Rich interactive menu. Enter `1`–`4` or `config` / `switch` / `start` / `refresh`, and press `Ctrl-C` to exit. Configuration, account switching, and session refresh return to the menu after completion. After selecting `start`, pressing `Ctrl-C` exits the application directly. Existing subcommands still work directly. Panels adapt to the terminal width.
+Run `xmu-rollcall` without arguments to open the Rich interactive menu. Enter `1`–`5` or `config` / `switch` / `start` / `refresh` / `update` (`upgrade` is the same command), and press `Ctrl-C` to exit. Configuration, account switching, and session refresh return to the menu after completion. After selecting `start`, pressing `Ctrl-C` exits the application directly. Existing subcommands still work directly. Panels adapt to the terminal width.
 
 ```bash
 xmu-rollcall         # open the interactive menu
@@ -80,10 +81,13 @@ xmu-rollcall config  # configure your account. support multiple accounts
 xmu-rollcall switch  # switch between accounts
 xmu-rollcall start   # start the monitor
 xmu-rollcall refresh # refresh login status
+xmu-rollcall update  # upgrade this program from this repository (alias: upgrade)
 
 uv run xmu-rollcall           # open the interactive menu with uv
 uv run xmu-rollcall <command> # run a subcommand with uv
 ```
+
+`update` upgrades the program only. If `uv` is on `PATH` it runs `uv tool install --upgrade --force git+https://github.com/sunshine-sutingjun/XMU-Rollcall-Bot-new.git#subdirectory=xmu-rollcall-cli`; otherwise it runs `pip install --upgrade` of that same URL. Saved accounts under `~/.xmu_rollcall` are left unchanged.
 
 `refresh` clears the current account's saved login session; the next monitoring run logs in again. The monitor shows the current time, uptime, query count, and polling interval. Pressing `Ctrl+C` clears the screen and displays exit statistics.
 
